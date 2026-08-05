@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WigWars Statistics</title>
+
+  <!--
+    Single-file loader for the WigWars statistics page.
+    The page itself is static; the displayed rankings are fetched live
+    from the Second Life capability URL whenever this file is opened.
+  -->
+
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    html,
+    body {
+      min-width: 100%;
+      min-height: 100%;
+      margin: 0;
+      background: #351005;
+    }
+
+    body {
+      box-sizing: border-box;
+    }
+
+    #wigwars-loading {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      z-index: 2147483647;
+      max-width: min(520px, calc(100vw - 24px));
+      padding: 9px 12px;
+      border: 1px solid rgba(255, 137, 51, 0.7);
+      border-radius: 5px;
+      color: #fff0df;
+      background: rgba(25, 5, 0, 0.92);
+      box-shadow: 0 3px 16px rgba(0, 0, 0, 0.45);
+      font: 13px/1.35 Arial, sans-serif;
+      white-space: pre-wrap;
+    }
+
+    #wigwars-loading.error {
+      color: #ffd7d7;
+      border-color: #e15a5a;
+      background: rgba(65, 0, 0, 0.95);
+    }
+
+    /* Minimal fallback appearance until the server-provided CSS arrives. */
+    h1,
+    h2,
+    h3,
+    h4,
+    p {
+      margin-top: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="wigwars-loading">Loading WigWars statistics...</div>
+
+  <script>
+    "use strict";
+
+    const BASE_URL =
+      "https://simhost-00562aada2e43e1fe.agni.secondlife.io:12043/cap/87aa8da5-b834-61b2-69e4-e9954b32b2e4/";
+
+    const loadingBox = document.getElementById("wigwars-loading");
+
+    function setStatus(message, isError = false) {
+      loadingBox.textContent = message;
+      loadingBox.classList.toggle("error", isError);
+      loadingBox.style.display = "block";
+      console[isError ? "error" : "log"](message);
+    }
+
+    async function fetchJson(path) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+
+      try {
+        const response = await fetch(BASE_URL + path, {
+          method: "GET",
+          mode: "cors",
+          cache: "no-store",
+          credentials: "omit",
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `${path}: ${response.status} ${response.statusText}`
+          );
+        }
+
+        return await response.json();
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    function injectPayload(payload, sourceName) {
+      if (!payload || typeof payload !== "object") {
+        throw new Error(`${sourceName}: invalid JSON response.`);
+      }
+
+      if (!payload.t || typeof payload.c !== "string") {
+        throw new Error(
+          `${sourceName}: response does not contain the expected t/c fields.`
+        );
+      }
+
+      const target = document.querySelector(payload.t);
+
+      if (!target) {
+        throw new Error(
+          `${sourceName}: target element '${payload.t}' was not found.`
+        );
+      }
+
+      const content = payload.c;
+      const trimmed = content.trim();
+
+ 
+      if (
+        target === document.head &&
+        trimmed !== "" &&
+        !trimmed.startsWith("<")
+      ) {
+        const style = document.createElement("style");
+        style.dataset.wigwarsSource = sourceName;
+        style.textContent = content;
+        target.appendChild(style);
+      } else {
+        target.insertAdjacentHTML("beforeend", content);
+      }
+    }
+
+    async function loadAndInject(path) {
+      const payload = await fetchJson(path);
+      injectPayload(payload, path);
+      return payload;
+    }
+
+    async function start() {
+      try {
+        setStatus("Loading WigWars styles...");
+        await loadAndInject("styles1");
+        await loadAndInject("styles2");
+
+        setStatus("Loading page structure...");
+        await loadAndInject("body");
+
+        setStatus("Loading factions, players and colonies...");
+        const results = await Promise.allSettled([
+          loadAndInject("factions"),
+          loadAndInject("players"),
+          loadAndInject("colonies"),
+          loadAndInject("modal")
+        ]);
+
+        const failures = results
+          .map((result, index) => ({ result, name: [
+            "factions",
+            "players",
+            "colonies",
+            "modal"
+          ][index] }))
+          .filter(item => item.result.status === "rejected");
+
+        if (failures.length > 0) {
+          const details = failures
+            .map(item => `${item.name}: ${item.result.reason.message}`)
+            .join("\n");
+
+          setStatus(
+            `The page loaded only partially.\n${details}`,
+            true
+          );
+          return;
+        }
+
+        setStatus("WigWars statistics loaded.");
+        setTimeout(() => {
+          loadingBox.style.display = "none";
+        }, 1800);
+      } catch (error) {
+        const extra = location.protocol === "file:"
+          ? "\n\nIf the browser blocks local cross-origin requests, open the file in another browser or serve it through a small local web server."
+          : "";
+
+        setStatus(`ERROR: ${error.message}${extra}`, true);
+      }
+    }
+
+    window.addEventListener("load", start, { once: true });
+  </script>
+</body>
+</html>
